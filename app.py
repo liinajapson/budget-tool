@@ -109,7 +109,7 @@ for idx, row in df.iterrows():
     else:
         break
 
-# Stage 2: Top-ups (move toward full funding)
+# Stage 2: Top-ups (toward full funding)
 if allow_partial:
     topups = df[df["topup"] > 0].sort_values("topup")
 
@@ -119,13 +119,26 @@ if allow_partial:
             budget_remaining -= row["topup"]
 
 # --------------------------------------------------
-# 6️⃣ Metrics
+# 6️⃣ Correct metrics (FIXED)
 # --------------------------------------------------
-funded_students = (df["allocated"] > 0).sum()
-fully_funded = (df["allocated"] == df["requested"]).sum()
-partially_funded = funded_students - fully_funded
-total_allocated = df["allocated"].sum()
+funded_mask = df["allocated"] > 0
 
+funded_students = funded_mask.sum()
+
+fully_funded = (
+    funded_mask & (df["allocated"] == df["requested"])
+).sum()
+
+partially_funded = (
+    funded_mask & (df["allocated"] < df["requested"])
+).sum()
+
+# Consistency assertion (safe guard)
+assert funded_students == fully_funded + partially_funded
+
+# --------------------------------------------------
+# 7️⃣ Results
+# --------------------------------------------------
 st.subheader("📊 Results")
 
 col1, col2, col3, col4 = st.columns(4)
@@ -137,11 +150,11 @@ col4.metric("Partially Funded", partially_funded)
 st.metric("Budget Remaining", f"{budget_remaining:,}")
 
 # --------------------------------------------------
-# 7️⃣ Display allocation table
+# 8️⃣ Allocation table
 # --------------------------------------------------
 st.subheader("🎓 Allocation Details")
 
-display_df = df[df["allocated"] > 0].copy()
+display_df = df[funded_mask].copy()
 display_df["status"] = display_df.apply(
     lambda r: "Full" if r["allocated"] == r["requested"] else "Partial",
     axis=1
@@ -155,9 +168,9 @@ st.dataframe(
 )
 
 # --------------------------------------------------
-# 8️⃣ Budget vs coverage curve (base funding)
+# 9️⃣ Budget vs coverage curve
 # --------------------------------------------------
-st.subheader("📈 Budget vs Students Funded")
+st.subheader("📈 Budget vs Students Funded (Base Funding)")
 
 df_sorted = df.sort_values("base")
 df_sorted["cumulative_base"] = df_sorted["base"].cumsum()
