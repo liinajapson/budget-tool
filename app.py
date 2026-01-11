@@ -29,7 +29,7 @@ cost_data = st.data_editor(
 )
 
 # --------------------------------------------------
-# 2️⃣ Budget & rules
+# 2️⃣ Budget & ceiling
 # --------------------------------------------------
 st.sidebar.header("💰 Budget Settings")
 
@@ -65,6 +65,12 @@ min_base = st.sidebar.number_input(
     disabled=not allow_partial
 )
 
+if allow_partial and min_base > ceiling:
+    st.sidebar.warning(
+        "Minimum guaranteed amount exceeds scholarship ceiling. "
+        "Base funding will be capped at requested amounts."
+    )
+
 # --------------------------------------------------
 # 4️⃣ Build student-level dataframe
 # --------------------------------------------------
@@ -72,12 +78,15 @@ rows = []
 
 for _, row in cost_data.iterrows():
     requested = min(row["scholarship_amount"], ceiling)
+
     for i in range(int(row["number_of_students"])):
+        base_amount = min(requested, min_base) if allow_partial else requested
+
         rows.append({
             "student_id": f"{requested}_{i+1}",
             "requested": requested,
-            "base": min_base if allow_partial else requested,
-            "topup": max(0, requested - min_base) if allow_partial else 0,
+            "base": base_amount,
+            "topup": requested - base_amount,
             "allocated": 0
         })
 
@@ -92,7 +101,7 @@ if df.empty:
 # --------------------------------------------------
 budget_remaining = total_budget
 
-# Stage 1: Base funding (or full funding if partial OFF)
+# Stage 1: Base funding (maximize coverage)
 for idx, row in df.iterrows():
     if budget_remaining >= row["base"]:
         df.at[idx, "allocated"] = row["base"]
@@ -100,9 +109,10 @@ for idx, row in df.iterrows():
     else:
         break
 
-# Stage 2: Top-ups (only if partial ON)
+# Stage 2: Top-ups (move toward full funding)
 if allow_partial:
     topups = df[df["topup"] > 0].sort_values("topup")
+
     for idx, row in topups.iterrows():
         if budget_remaining >= row["topup"]:
             df.at[idx, "allocated"] += row["topup"]
@@ -119,7 +129,6 @@ total_allocated = df["allocated"].sum()
 st.subheader("📊 Results")
 
 col1, col2, col3, col4 = st.columns(4)
-
 col1.metric("Total Budget", f"{total_budget:,}")
 col2.metric("Students Funded", funded_students)
 col3.metric("Fully Funded", fully_funded)
@@ -128,7 +137,7 @@ col4.metric("Partially Funded", partially_funded)
 st.metric("Budget Remaining", f"{budget_remaining:,}")
 
 # --------------------------------------------------
-# 7️⃣ Display allocations
+# 7️⃣ Display allocation table
 # --------------------------------------------------
 st.subheader("🎓 Allocation Details")
 
@@ -139,17 +148,14 @@ display_df["status"] = display_df.apply(
 )
 
 st.dataframe(
-    display_df[[
-        "student_id",
-        "requested",
-        "allocated",
-        "status"
-    ]],
+    display_df[
+        ["student_id", "requested", "allocated", "status"]
+    ],
     use_container_width=True
 )
 
 # --------------------------------------------------
-# 8️⃣ Coverage vs budget curve
+# 8️⃣ Budget vs coverage curve (base funding)
 # --------------------------------------------------
 st.subheader("📈 Budget vs Students Funded")
 
