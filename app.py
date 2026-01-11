@@ -1,20 +1,24 @@
 import streamlit as st
 import pandas as pd
 
+# --------------------------------------------------
+# Page config
+# --------------------------------------------------
 st.set_page_config(page_title="Scholarship Budget Simulator", layout="wide")
 st.title("🎓 Scholarship Budget Simulator")
+
 st.markdown("""
-This tool helps you **plan scholarship allocations**:
-- Enter scholarship amounts and number of students
-- Adjust budget and ceiling
-- See how many scholarships can be funded
-- Explore scenarios interactively
+This tool helps you **simulate scholarship allocation strategies**:
+- Full or partial scholarships
+- Budget ceilings
+- Coverage vs generosity trade-offs
 """)
 
-# -------------------------
+# --------------------------------------------------
 # 1️⃣ Input: Scholarship costs
-# -------------------------
+# --------------------------------------------------
 st.subheader("📥 Define Scholarship Costs")
+
 cost_data = st.data_editor(
     pd.DataFrame({
         "scholarship_amount": [500, 800, 1200],
@@ -24,16 +28,18 @@ cost_data = st.data_editor(
     use_container_width=True
 )
 
-# -------------------------
-# 2️⃣ Inputs: Budget & Ceiling
-# -------------------------
+# --------------------------------------------------
+# 2️⃣ Budget & rules
+# --------------------------------------------------
 st.sidebar.header("💰 Budget Settings")
+
 total_budget = st.sidebar.number_input(
     "Total Budget",
     min_value=0,
     value=10000,
     step=100
 )
+
 ceiling = st.sidebar.number_input(
     "Maximum per Scholarship",
     min_value=0,
@@ -41,81 +47,124 @@ ceiling = st.sidebar.number_input(
     step=100
 )
 
-# -------------------------
-# 3️⃣ Input: Target scholarships (optional)
-# -------------------------
-target_scholarships = st.sidebar.number_input(
-    "Target number of scholarships (optional)",
-    min_value=0,
-    value=0,
-    step=1
+# --------------------------------------------------
+# 3️⃣ Partial scholarship options
+# --------------------------------------------------
+st.sidebar.header("🎯 Partial Scholarship Options")
+
+allow_partial = st.sidebar.checkbox(
+    "Allow partial scholarships",
+    value=False
 )
 
-# -------------------------
-# 4️⃣ Build applications dataframe
-# -------------------------
+min_base = st.sidebar.number_input(
+    "Minimum guaranteed amount",
+    min_value=0,
+    value=500,
+    step=100,
+    disabled=not allow_partial
+)
+
+# --------------------------------------------------
+# 4️⃣ Build student-level dataframe
+# --------------------------------------------------
 rows = []
+
 for _, row in cost_data.iterrows():
-    amt = min(row["scholarship_amount"], ceiling)
+    requested = min(row["scholarship_amount"], ceiling)
     for i in range(int(row["number_of_students"])):
-        rows.append({"student_id": f"{amt}_{i+1}", "cost": amt})
+        rows.append({
+            "student_id": f"{requested}_{i+1}",
+            "requested": requested,
+            "base": min_base if allow_partial else requested,
+            "topup": max(0, requested - min_base) if allow_partial else 0,
+            "allocated": 0
+        })
 
 df = pd.DataFrame(rows)
 
-if not df.empty:
-    df = df.sort_values("cost").reset_index(drop=True)
-    df["cumulative_cost"] = df["cost"].cumsum()
+if df.empty:
+    st.warning("Please enter at least one scholarship option.")
+    st.stop()
 
-    # -------------------------
-    # 5️⃣ Calculate allocation
-    # -------------------------
-    allocated = df[df["cumulative_cost"] <= total_budget]
-    num_scholarships = len(allocated)
-    total_allocated_cost = allocated["cost"].sum()
-    budget_left = total_budget - total_allocated_cost
+# --------------------------------------------------
+# 5️⃣ Allocation logic
+# --------------------------------------------------
+budget_remaining = total_budget
 
-    # Minimum budget for target
-    min_budget_needed = None
-    if target_scholarships > 0:
-        if target_scholarships > len(df):
-            min_budget_needed = "Not enough students"
-        else:
-            min_budget_needed = int(df.loc[target_scholarships - 1, "cumulative_cost"])
+# Stage 1: Base funding (or full funding if partial OFF)
+for idx, row in df.iterrows():
+    if budget_remaining >= row["base"]:
+        df.at[idx, "allocated"] = row["base"]
+        budget_remaining -= row["base"]
+    else:
+        break
 
-    # -------------------------
-    # 6️⃣ Display results
-    # -------------------------
-    st.subheader("📊 Results")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Budget", f"{total_budget:,}")
-    col2.metric("Scholarships Funded", num_scholarships)
-    col3.metric("Budget Remaining", f"{budget_left:,}")
+# Stage 2: Top-ups (only if partial ON)
+if allow_partial:
+    topups = df[df["topup"] > 0].sort_values("topup")
+    for idx, row in topups.iterrows():
+        if budget_remaining >= row["topup"]:
+            df.at[idx, "allocated"] += row["topup"]
+            budget_remaining -= row["topup"]
 
-    if min_budget_needed:
-        st.info(
-            f"💡 Minimum budget needed to fund "
-            f"{target_scholarships} scholarships: {min_budget_needed:,}"
-        )
+# --------------------------------------------------
+# 6️⃣ Metrics
+# --------------------------------------------------
+funded_students = (df["allocated"] > 0).sum()
+fully_funded = (df["allocated"] == df["requested"]).sum()
+partially_funded = funded_students - fully_funded
+total_allocated = df["allocated"].sum()
 
-    st.subheader("🎓 Selected Scholarships")
-    st.dataframe(allocated.drop(columns=["cumulative_cost"]))
+st.subheader("📊 Results")
 
-    # -------------------------
-    # 7️⃣ Budget vs Scholarships curve
-    # -------------------------
-    st.subheader("📈 Budget vs Scholarships")
-    max_budget = max(total_budget, int(df["cumulative_cost"].max()))
-    step = max(100, max_budget // 50)
+col1, col2, col3, col4 = st.columns(4)
 
-    curve = []
-    for b in range(0, max_budget + 1, step):
-        curve.append({
-            "budget": b,
-            "scholarships": (df["cumulative_cost"] <= b).sum()
-        })
+col1.metric("Total Budget", f"{total_budget:,}")
+col2.metric("Students Funded", funded_students)
+col3.metric("Fully Funded", fully_funded)
+col4.metric("Partially Funded", partially_funded)
 
-    curve_df = pd.DataFrame(curve)
-    st.line_chart(curve_df.set_index("budget"))
+st.metric("Budget Remaining", f"{budget_remaining:,}")
 
-else:
-    st.warning("Please enter at least one scholarship amount.")
+# --------------------------------------------------
+# 7️⃣ Display allocations
+# --------------------------------------------------
+st.subheader("🎓 Allocation Details")
+
+display_df = df[df["allocated"] > 0].copy()
+display_df["status"] = display_df.apply(
+    lambda r: "Full" if r["allocated"] == r["requested"] else "Partial",
+    axis=1
+)
+
+st.dataframe(
+    display_df[[
+        "student_id",
+        "requested",
+        "allocated",
+        "status"
+    ]],
+    use_container_width=True
+)
+
+# --------------------------------------------------
+# 8️⃣ Coverage vs budget curve
+# --------------------------------------------------
+st.subheader("📈 Budget vs Students Funded")
+
+df_sorted = df.sort_values("base")
+df_sorted["cumulative_base"] = df_sorted["base"].cumsum()
+
+curve = []
+max_budget = max(total_budget, int(df_sorted["cumulative_base"].max()))
+step = max(100, max_budget // 50)
+
+for b in range(0, max_budget + 1, step):
+    curve.append({
+        "budget": b,
+        "students_funded": (df_sorted["cumulative_base"] <= b).sum()
+    })
+
+curve_df = pd.DataFrame(curve)
+st.line_chart(curve_df.set_index("budget"))
