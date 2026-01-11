@@ -107,9 +107,10 @@ for idx, row in df.iterrows():
         df.at[idx, "allocated"] = row["base"]
         budget_remaining -= row["base"]
     else:
+        # Cannot fully fund base, stop allocation
         break
 
-# Stage 2: Top-ups (toward full funding)
+# Stage 2: Top-ups (strict: full top-ups only)
 if allow_partial:
     topups = df[df["topup"] > 0].sort_values("topup")
 
@@ -117,27 +118,23 @@ if allow_partial:
         if budget_remaining >= row["topup"]:
             df.at[idx, "allocated"] += row["topup"]
             budget_remaining -= row["topup"]
+        else:
+            break  # Stop if budget cannot cover full top-up
 
 # --------------------------------------------------
-# 6️⃣ Correct metrics (FIXED)
+# 6️⃣ Metrics (corrected)
 # --------------------------------------------------
 funded_mask = df["allocated"] > 0
 
 funded_students = funded_mask.sum()
+fully_funded = (funded_mask & (df["allocated"] == df["requested"])).sum()
+partially_funded = (funded_mask & (df["allocated"] < df["requested"])).sum()
 
-fully_funded = (
-    funded_mask & (df["allocated"] == df["requested"])
-).sum()
-
-partially_funded = (
-    funded_mask & (df["allocated"] < df["requested"])
-).sum()
-
-# Consistency assertion (safe guard)
+# Consistency safeguard
 assert funded_students == fully_funded + partially_funded
 
 # --------------------------------------------------
-# 7️⃣ Results
+# 7️⃣ Display results
 # --------------------------------------------------
 st.subheader("📊 Results")
 
@@ -161,29 +158,24 @@ display_df["status"] = display_df.apply(
 )
 
 st.dataframe(
-    display_df[
-        ["student_id", "requested", "allocated", "status"]
-    ],
+    display_df[["student_id", "requested", "allocated", "status"]],
     use_container_width=True
 )
 
 # --------------------------------------------------
-# 9️⃣ Budget vs coverage curve
+# 9️⃣ Cumulative Coverage Curve (CUSUM)
 # --------------------------------------------------
-st.subheader("📈 Budget vs Students Funded (Base Funding)")
+st.subheader("📈 Cumulative Coverage Curve")
 
-df_sorted = df.sort_values("base")
-df_sorted["cumulative_base"] = df_sorted["base"].cumsum()
+# Sort by base funding
+curve_df = df.sort_values("base").copy()
+curve_df["cum_spend"] = curve_df["base"].cumsum()
+curve_df["cum_students"] = range(1, len(curve_df) + 1)
 
-curve = []
-max_budget = max(total_budget, int(df_sorted["cumulative_base"].max()))
-step = max(100, max_budget // 50)
+# Limit to realistic budget for display
+curve_df = curve_df[curve_df["cum_spend"] <= max(total_budget, curve_df["cum_spend"].max())]
 
-for b in range(0, max_budget + 1, step):
-    curve.append({
-        "budget": b,
-        "students_funded": (df_sorted["cumulative_base"] <= b).sum()
-    })
-
-curve_df = pd.DataFrame(curve)
-st.line_chart(curve_df.set_index("budget"))
+# Plot cumulative curve
+st.line_chart(
+    curve_df.set_index("cum_spend")["cum_students"]
+)
